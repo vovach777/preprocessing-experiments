@@ -9,3 +9,4 @@
 ![otsu 0.2 output](/finger-output2.png)
 ## output sred7
 ![sred7 0.3 output](/finger-output3.png)
+![sred7 0.3 output](/finger-output3_x2.png)
