@@ -648,7 +648,7 @@ int main(int argc, char **argv) {
 
       auto threshold = sred7(vecir.size(), vecir.data() );
       surface_input.process_filled_circle(xx,yy,squze_size/2,[&](uint8_t &v) {  if (v <= threshold  ) black_count++; else black_count--; });
-      surface_output.color = black_count > squze_size ? 0 : 255;
+      surface_output.color = black_count > squze_size*2 ? 0 : 255;
       surface_output.draw_point(x,y);
    }
 
