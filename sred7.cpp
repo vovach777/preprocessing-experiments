@@ -37,9 +37,11 @@
 #include <iomanip>
 #include <functional>
 #include <type_traits>
+#include <filesystem>
 #ifndef SRED7
 #include "blur.hpp"
 #endif
+#include "myargs.hpp"
 
 #define MAX_INTENSITY 255
 
@@ -466,7 +468,7 @@ int sred7(int size, T *input )
          count++;
       }
    }
-   return c / count;
+   return count ? c / count : 0;
 }
 
 template <typename T, int levels>
@@ -551,20 +553,47 @@ double distance2d(int x1, int y1, int x2, int y2) {
 
 
 
+#if 0
+const option::Descriptor usage[] =
+{
+ {UNKNOWN, 0,"","", Arg::Illegal, ""},
+ {HELP,     0,"?" , "help",   Arg::Illegal, "  --help  \tPrint usage and exit." },
+ {CONTRAST, 0,"c", "contrast", Arg::Numeric, "  --contrast=<value>, -c<value>  \tApply contrast: (v-128)*value+128." },
+ {NEGATIVE, 0,"n", "negative",  Arg::Optional, "  --negitive, -n  \tprocess negotive of image: (255-v)." },
+ {THRESHOLD_SHIFT,0,"t","threshold-shift", Arg::Numeric, "  --threshold-shift=<shift>, -t<shift>  \tcorrect black-to-white threshold. default:-1" },
+ {BLACK_SHIFT, 0, "b", "black-shift", Arg::Numeric,   "  --black-shift=<shift>, -b<shift>  \tshift black-width balance. greatter -> whitely. default:2" },
+ {0,0,0,0,0,0}
+};
+#endif
+
+
 int main(int argc, char **argv) {
   // Optional parameters
 
-  int overrided_threshold = 0;
+  myargs::Args args(argc,argv);
+
+
+
+  std::string in_filename = args[1];
+
+  if ( in_filename.empty() || not std::filesystem::exists( in_filename ) ) {
+    std::cerr << "input file \""<< in_filename << "\" is not exists!\n";
+    return 1;
+  }
+
+
+  std::string out_filename = std::filesystem::path(in_filename).replace_filename( std::filesystem::path(in_filename).stem().string() + args.get("suffix", "-output")).replace_extension("png").string();
 
   // Load input image
-  // CImage input;
-  // input.load((char*)pinput.value);
   int Nx,Ny, num_channels;
-  //unsigned char *data = stbi_load("D:\\Sources\\C++\\Projects\\my_compress\\CF000915-ls-h.bmp", &x, &y, &n, 0);
 
-
-  unsigned char* input = stbi_load(argv[1], &Nx, &Ny, &num_channels, 0);
+  unsigned char* input = stbi_load(in_filename.data(), &Nx, &Ny, &num_channels, 0);
   const size_t N = Nx * Ny;
+  if (input == NULL || N==0) {
+    std::cerr << "can not read image!\n";
+    return 2;
+  }
+
 
 
   if (num_channels > 1){
@@ -587,13 +616,20 @@ int main(int argc, char **argv) {
 
   max::Surface surface_input(input,Nx,Ny);
   max::Surface surface_output(output,Nx,Ny);
-  //негатив
-  surface_input.process_all([](uint8_t &v) { v=255-v; });
-  //fast_gaussian_blur<uint8_t, 1, 3>(input,Nx,Ny,8);
+  if (args.has("n") ||  args.has("negative")) {
+    //негатив
+    surface_input.process_all([](uint8_t &v) { v= (255-v); });
+  }
 
+   //contrast
+  if (args.has("c") || args.has("contrast")) {
+    auto contrast_multipler = args.has("c") ? args.get("c") : args.get("contrast");
+    surface_input.process_all([contrast_multipler](uint8_t &v) { v= std::clamp<int>( (v-128) * contrast_multipler + 128,0,255); });
+  }
 
-   std::string in_filename = argv[1];
-   auto out_filename = in_filename.substr(0,in_filename.size()-4) + "-output.png";
+  if (args.has("cn-file"))
+    stbi_write_png(args["cn-file"].data() ,Nx,Ny,1,input,Nx);
+
 
 
 #ifdef OTSU_1
@@ -633,11 +669,18 @@ int main(int argc, char **argv) {
 #endif
 
 #ifdef SRED7
+
    constexpr auto squze_size = 2;
+   //constexpr auto S = (squze_size/2+1)*(squze_size/2+1)*3;
    int new_x = (Nx-squze_size)/squze_size;
    int new_y = (Ny-squze_size)/squze_size;
    surface_output.width = new_x;
    surface_output.height = new_y;
+   auto threshold_shift = args.get<-1>("t");
+   auto black_shift = args.get<5>("b");
+   auto min_threshold = args.get<0, 0,255>("min");
+   auto max_threshold = args.get<160,0,255>("max");
+   auto show_diagonal = args.has("print-diagonal");
    for (int y=0; y<new_y; y++)
    for (int x=0; x<new_x; x++)
    {
@@ -646,9 +689,11 @@ int main(int argc, char **argv) {
       auto yy = (y + squze_size/2)*squze_size;
       auto vecir = surface_input.get_circle_vector(xx,yy,squze_size*3);
 
-      auto threshold = sred7(vecir.size(), vecir.data() );
-      surface_input.process_filled_circle(xx,yy,squze_size/2,[&](uint8_t &v) {  if (v <= threshold  ) black_count++; else black_count--; });
-      surface_output.color = black_count > squze_size*2 ? 0 : 255;
+      auto threshold = std::clamp<int>( sred7(vecir.size(), vecir.data() ) + threshold_shift, min_threshold, max_threshold );
+      if (show_diagonal && x==y)
+         std::cout << threshold << " ";
+      surface_input.process_filled_circle(xx,yy,squze_size,[&](uint8_t &v) {  if (v <= threshold ) black_count++; else black_count--; });
+      surface_output.color = black_count >= black_shift ? 0 : 255;
       surface_output.draw_point(x,y);
    }
 
@@ -657,6 +702,7 @@ int main(int argc, char **argv) {
   // Save output
 
    stbi_write_png(out_filename.data() ,new_x,new_y,1,output,new_x);
+
 
 
   free(output);
